@@ -1,17 +1,33 @@
 <script lang="ts">
 	import MacropadSvg from '$lib/components/MacropadSvg.svelte';
 	import KeyConfigPanel from '$lib/components/KeyConfigPanel.svelte';
+	import type { SelectedTarget } from '$lib/model/types';
+	import { isKeySelected } from '$lib/model/types';
 
 	// App state
-	let selectedKey = $state(0);
+	let selectedTarget = $state<SelectedTarget>({ kind: 'key', index: 0 });
 	let labels = $state(['', '', '', '', '', '']);
+	let icons = $state(['⬆', '⬇', '📋', '⌨', '🖱', '⚙']);
 
-	function handleKeySelect(keyIndex: number) {
-		selectedKey = keyIndex;
+	function handleWheelSelect() {
+		selectedTarget = { kind: 'wheel' };
+	}
+
+	function handleKeySelect(index: number) {
+		selectedTarget = { kind: 'key', index };
 	}
 
 	function handleLabelChange(value: string) {
-		labels[selectedKey] = value;
+		if (isKeySelected(selectedTarget)) {
+			labels[selectedTarget.index] = value;
+		}
+	}
+
+	function getCurrentLabel(): string {
+		if (isKeySelected(selectedTarget)) {
+			return labels[selectedTarget.index];
+		}
+		return '';
 	}
 </script>
 
@@ -23,18 +39,28 @@
 <main class="container">
 	<header>
 		<h1>Haptic Macro Pad Configurator</h1>
-		<p>Select a key to configure its label and keybind</p>
+		<p>Select a component to configure its settings</p>
 	</header>
 
 	<div class="content">
 		<div class="macropad-section">
-			<h2>Device</h2>
-			<MacropadSvg {selectedKey} onSelect={handleKeySelect} {labels} />
+			<h2>Device Preview</h2>
+			<MacropadSvg
+				{selectedTarget}
+				{labels}
+				{icons}
+				onSelectWheel={handleWheelSelect}
+				onSelectKey={handleKeySelect}
+			/>
 		</div>
 
 		<div class="config-section">
 			<h2>Configuration</h2>
-			<KeyConfigPanel {selectedKey} label={labels[selectedKey]} onLabelChange={handleLabelChange} />
+			<KeyConfigPanel
+				{selectedTarget}
+				label={getCurrentLabel()}
+				onLabelChange={handleLabelChange}
+			/>
 		</div>
 	</div>
 </main>
