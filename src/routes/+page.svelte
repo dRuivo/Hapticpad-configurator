@@ -2,13 +2,16 @@
 	import MacropadSvg from '$lib/components/MacropadSvg.svelte';
 	import KeyConfigPanel from '$lib/components/KeyConfigPanel.svelte';
 	import ProfilesSidebar from '$lib/components/ProfilesSidebar.svelte';
-	import type { SelectedTarget, Profile, AppState } from '$lib/model/types';
+	import ImportPreviewModal from '$lib/components/ImportPreviewModal.svelte';
+	import type { SelectedTarget, Profile, AppState, ImportPreview } from '$lib/model/types';
 	import { isKeySelected, createEmptyProfile, generateId } from '$lib/model/types';
 	import {
 		importConfigZip,
 		exportConfigZip,
 		exportConfigXml,
-		downloadBlob
+		downloadBlob,
+		importConfigXmlOnly,
+		createZipImportPreview
 	} from '$lib/io/configZip';
 
 	// Initialize app state
@@ -16,7 +19,8 @@
 	let appState = $state<AppState>({
 		profiles: [initialProfile],
 		selectedProfileId: initialProfile.id,
-		selectedTarget: { kind: 'key', index: 0 }
+		selectedTarget: { kind: 'key', index: 0 },
+		isDirty: false
 	});
 
 	// Status messages
@@ -27,7 +31,12 @@
 		details?: string[];
 	}
 	let statusMessage = $state<StatusMessage | null>(null);
-	let fileInput: HTMLInputElement;
+	let zipFileInput: HTMLInputElement;
+	let xmlFileInput: HTMLInputElement;
+
+	// Import preview modal state
+	let importPreview = $state<ImportPreview | null>(null);
+	let pendingImport = $state<{ type: 'zip' | 'xml'; preview: ImportPreview } | null>(null);
 
 	// Computed values
 	const selectedProfile = $derived(
@@ -35,6 +44,19 @@
 	);
 	const labels = $derived(selectedProfile?.keys.map((k) => k.label) || []);
 	const icons = $derived(selectedProfile?.keys.map((k) => k.icon || '') || []);
+
+	// Mark as dirty whenever app state changes (except isDirty itself)
+	$effect(() => {
+		// Watch for changes in profiles, selectedProfileId, or selectedTarget
+		appState.profiles;
+		appState.selectedProfileId;
+		appState.selectedTarget;
+
+		// Only mark dirty if not already dirty to avoid infinite loop
+		if (!appState.isDirty) {
+			appState.isDirty = true;
+		}
+	});
 
 	function handleWheelSelect() {
 		appState.selectedTarget = { kind: 'wheel' };
@@ -132,43 +154,79 @@
 		}
 	}
 
-	function handleImportClick() {
-		fileInput.click();
+	function handleImportZipClick() {
+		zipFileInput.click();
 	}
 
-	async function handleFileChange(event: Event) {
+	function handleImportXmlClick() {
+		xmlFileInput.click();
+	}
+
+	async function handleZipFileChange(event: Event) {
 		const input = event.target as HTMLInputElement;
 		if (!input.files || input.files.length === 0) return;
 
 		const file = input.files[0];
-		if (!file.name.toLowerCase().endsWith('.zip')) {
-			setStatus('error', 'Please select a .zip file');
-			return;
-		}
 
 		try {
 			clearStatus();
-			const { state, warnings } = await importConfigZip(file);
-
-			// Update app state
-			appState = state;
-
-			// Show success with warnings if any
-			if (warnings.length > 0) {
-				setStatus(
-					'warning',
-					`Imported ${state.profiles.length} profile(s) with ${warnings.length} warning(s)`,
-					warnings
-				);
-			} else {
-				setStatus('success', `Successfully imported ${state.profiles.length} profile(s)`);
-			}
+			const preview = await createZipImportPreview(file);
+			pendingImport = { type: 'zip', preview };
+			importPreview = preview;
 		} catch (error) {
 			setStatus('error', error instanceof Error ? error.message : 'Import failed');
 		} finally {
-			// Clear file input
 			input.value = '';
 		}
+	}
+
+	async function handleXmlFileChange(event: Event) {
+		const input = event.target as HTMLInputElement;
+		if (!input.files || input.files.length === 0) return;
+
+		const file = input.files[0];
+
+		try {
+			clearStatus();
+			const preview = await importConfigXmlOnly(file);
+			pendingImport = { type: 'xml', preview };
+			importPreview = preview;
+		} catch (error) {
+			setStatus('error', error instanceof Error ? error.message : 'Import failed');
+		} finally {
+			input.value = '';
+		}
+	}
+
+	function confirmImport() {
+		if (!pendingImport) return;
+
+		// Update app state with preview data
+		appState = {
+			...pendingImport.preview.state,
+			isDirty: false // Mark as clean since we just imported
+		};
+
+		// Show success message
+		const { preview } = pendingImport;
+		if (preview.warnings.length > 0) {
+			setStatus(
+				'warning',
+				`Imported ${preview.profileCount} profile(s) with ${preview.warnings.length} warning(s)`,
+				preview.warnings
+			);
+		} else {
+			setStatus('success', `Successfully imported ${preview.profileCount} profile(s)`);
+		}
+
+		// Clear modal state
+		importPreview = null;
+		pendingImport = null;
+	}
+
+	function cancelImport() {
+		importPreview = null;
+		pendingImport = null;
 	}
 
 	async function handleExportZip() {
@@ -177,6 +235,9 @@
 			const { blob, warnings } = await exportConfigZip(appState);
 
 			downloadBlob(blob, 'macropad-config.zip');
+
+			// Mark as clean after successful export
+			appState.isDirty = false;
 
 			if (warnings.length > 0) {
 				setStatus('warning', 'ZIP exported with warnings', warnings);
@@ -216,16 +277,26 @@
 	<header class="import-export-header">
 		<div class="header-content">
 			<div class="title-section">
-				<h1>Haptic Macro Pad Configurator</h1>
+				<h1>
+					Haptic Macro Pad Configurator
+					{#if appState.isDirty}
+						<span class="dirty-indicator" title="Unsaved changes">●</span>
+					{/if}
+				</h1>
 				<p>Select a component to configure its settings</p>
 			</div>
 
 			<div class="import-export-controls">
-				<button class="import-button" onclick={handleImportClick}> 📁 Import (.zip) </button>
-				<button class="export-button" onclick={handleExportZip}> 📦 Export (.zip) </button>
-				<button class="export-button secondary" onclick={handleExportXml}>
-					📄 Export (XML only)
-				</button>
+				<div class="import-group">
+					<button class="import-button" onclick={handleImportZipClick}> 📁 Import ZIP </button>
+					<button class="import-button secondary" onclick={handleImportXmlClick}>
+						📄 Import XML
+					</button>
+				</div>
+				<div class="export-group">
+					<button class="export-button" onclick={handleExportZip}> 📦 Export ZIP </button>
+					<button class="export-button secondary" onclick={handleExportXml}> 📄 Export XML </button>
+				</div>
 			</div>
 		</div>
 
@@ -250,12 +321,19 @@
 		{/if}
 	</header>
 
-	<!-- Hidden file input -->
+	<!-- Hidden file inputs -->
 	<input
-		bind:this={fileInput}
+		bind:this={zipFileInput}
 		type="file"
 		accept=".zip"
-		onchange={handleFileChange}
+		onchange={handleZipFileChange}
+		style="display: none;"
+	/>
+	<input
+		bind:this={xmlFileInput}
+		type="file"
+		accept=".xml,.txt"
+		onchange={handleXmlFileChange}
 		style="display: none;"
 	/>
 
@@ -294,6 +372,9 @@
 		</div>
 	</div>
 </main>
+
+<!-- Import preview modal -->
+<ImportPreviewModal preview={importPreview} onConfirm={confirmImport} onCancel={cancelImport} />
 
 <style>
 	:global(body) {
@@ -346,9 +427,42 @@
 		color: #718096;
 	}
 
+	h1 {
+		margin: 0;
+		font-size: 1.8rem;
+		color: #2c3e50;
+		font-weight: 700;
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.dirty-indicator {
+		color: #e74c3c;
+		font-size: 1.2rem;
+		animation: pulse 2s infinite;
+	}
+
+	@keyframes pulse {
+		0%,
+		100% {
+			opacity: 1;
+		}
+		50% {
+			opacity: 0.5;
+		}
+	}
+
 	.import-export-controls {
 		display: flex;
-		gap: 12px;
+		gap: 16px;
+		align-items: center;
+	}
+
+	.import-group,
+	.export-group {
+		display: flex;
+		gap: 8px;
 		align-items: center;
 	}
 
@@ -364,7 +478,7 @@
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		min-width: 140px;
+		min-width: 120px;
 		justify-content: center;
 	}
 
@@ -378,6 +492,16 @@
 		background: linear-gradient(135deg, #2980b9 0%, #1f6ba6 100%);
 		transform: translateY(-1px);
 		box-shadow: 0 4px 8px rgba(52, 152, 219, 0.4);
+	}
+
+	.import-button.secondary {
+		background: linear-gradient(135deg, #95a5a6 0%, #7f8c8d 100%);
+		box-shadow: 0 2px 4px rgba(149, 165, 166, 0.3);
+	}
+
+	.import-button.secondary:hover {
+		background: linear-gradient(135deg, #7f8c8d 0%, #6c7b7b 100%);
+		box-shadow: 0 4px 8px rgba(149, 165, 166, 0.4);
 	}
 
 	.export-button {

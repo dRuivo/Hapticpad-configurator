@@ -1,5 +1,7 @@
 <script lang="ts">
 	import type { Profile } from '$lib/model/types';
+	import { hasUnsafeProfileName } from '$lib/model/types';
+	import ConfirmModal from './ConfirmModal.svelte';
 
 	interface Props {
 		profiles: Profile[];
@@ -23,6 +25,13 @@
 
 	let editingProfileId = $state<string | null>(null);
 	let editingName = $state('');
+
+	// Confirmation modal state
+	let confirmModal = $state({
+		isOpen: false,
+		profileId: '',
+		profileName: ''
+	});
 
 	function handleProfileClick(profileId: string, event: Event) {
 		// Don't select if clicking on interactive controls
@@ -92,10 +101,30 @@
 		onMoveProfile(profileId, direction);
 	}
 
-	function handleRemove(profileId: string) {
-		if (profiles.length > 1) {
-			onRemoveProfile(profileId);
+	function requestRemove(profile: Profile, event: Event) {
+		event.stopPropagation();
+		if (profiles.length <= 1) return;
+
+		confirmModal = {
+			isOpen: true,
+			profileId: profile.id,
+			profileName: profile.name
+		};
+	}
+
+	function confirmRemove() {
+		if (confirmModal.profileId) {
+			onRemoveProfile(confirmModal.profileId);
 		}
+		confirmModal.isOpen = false;
+	}
+
+	function cancelRemove() {
+		confirmModal.isOpen = false;
+	}
+
+	function getBitmapCount(profile: Profile): number {
+		return profile.keys.filter((key) => key.bmp).length;
 	}
 
 	const maxProfiles = 128;
@@ -147,6 +176,9 @@
 							onblur={handleEditBlur}
 							aria-label="Edit profile name"
 						/>
+						{#if hasUnsafeProfileName(editingName)}
+							<div class="unsafe-name-warning">⚠️ Name contains unsafe characters for export</div>
+						{/if}
 					{:else}
 						<span
 							class="name-text"
@@ -157,8 +189,16 @@
 							aria-label="Click to edit profile name"
 						>
 							{profile.name}
+							{#if hasUnsafeProfileName(profile.name)}
+								<span class="unsafe-indicator" title="Unsafe characters for export">⚠️</span>
+							{/if}
 						</span>
 					{/if}
+
+					<!-- Bitmap count indicator -->
+					<div class="bitmap-indicator" class:has-bitmaps={getBitmapCount(profile) > 0}>
+						{getBitmapCount(profile)}/6
+					</div>
 				</div>
 
 				<!-- Action buttons -->
@@ -186,7 +226,7 @@
 					<!-- Remove button -->
 					<button
 						class="remove-button"
-						onclick={() => handleRemove(profile.id)}
+						onclick={(e) => requestRemove(profile, e)}
 						disabled={!canRemoveProfile}
 						aria-label="Remove profile"
 						title="Remove profile"
@@ -198,6 +238,18 @@
 		{/each}
 	</div>
 </aside>
+
+<!-- Confirmation modal for profile removal -->
+<ConfirmModal
+	isOpen={confirmModal.isOpen}
+	title="Remove Profile"
+	message="Are you sure you want to remove the profile '{confirmModal.profileName}'? This action cannot be undone."
+	confirmText="Remove"
+	cancelText="Cancel"
+	variant="danger"
+	onConfirm={confirmRemove}
+	onCancel={cancelRemove}
+/>
 
 <style>
 	.profiles-sidebar {
@@ -319,10 +371,13 @@
 	.profile-name {
 		flex: 1;
 		min-width: 0;
+		position: relative;
 	}
 
 	.name-text {
-		display: block;
+		display: flex;
+		align-items: center;
+		gap: 6px;
 		font-weight: 500;
 		color: #2d3748;
 		cursor: pointer;
@@ -336,6 +391,11 @@
 		background: rgba(52, 152, 219, 0.1);
 	}
 
+	.unsafe-indicator {
+		color: #f39c12;
+		font-size: 12px;
+	}
+
 	.name-input {
 		width: 100%;
 		padding: 4px 8px;
@@ -345,6 +405,37 @@
 		font-weight: 500;
 		background: white;
 		outline: none;
+	}
+
+	.unsafe-name-warning {
+		position: absolute;
+		top: 100%;
+		left: 0;
+		right: 0;
+		background: #fff3cd;
+		border: 1px solid #ffeaa7;
+		border-radius: 4px;
+		padding: 6px 8px;
+		font-size: 11px;
+		color: #856404;
+		z-index: 10;
+		margin-top: 2px;
+	}
+
+	.bitmap-indicator {
+		background: #f5f5f5;
+		color: #999;
+		font-size: 11px;
+		padding: 2px 6px;
+		border-radius: 3px;
+		font-weight: 600;
+		min-width: 24px;
+		text-align: center;
+	}
+
+	.bitmap-indicator.has-bitmaps {
+		background: #e8f5e8;
+		color: #2d5a3d;
 	}
 
 	.profile-actions {

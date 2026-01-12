@@ -1,6 +1,7 @@
 import JSZip from 'jszip';
-import type { AppState } from '$lib/model/types';
+import type { AppState, ImportPreview } from '$lib/model/types';
 import { parseConfigXml, buildConfigXml } from './xmlCodec';
+import { createUniqueFolderNames, sanitizeProfileName } from '$lib/model/types';
 
 interface ImportResult {
 	state: AppState;
@@ -65,9 +66,58 @@ function isValidConfigPath(path: string): boolean {
 }
 
 /**
- * Import configuration from ZIP file
+ * Import configuration from XML file only
  */
-export async function importConfigZip(file: File): Promise<ImportResult> {
+export async function importConfigXmlOnly(file: File): Promise<ImportPreview> {
+	const warnings: string[] = [];
+
+	try {
+		// Read XML file content
+		const xmlText = await file.text();
+
+		// Parse XML configuration
+		const { profiles, settingsXml, warnings: parseWarnings } = parseConfigXml(xmlText);
+		warnings.push(...parseWarnings);
+
+		// Add warning about missing bitmaps
+		warnings.push('No bitmap files imported (XML-only import)');
+
+		// Ensure all keys have null bmp payloads
+		for (const profile of profiles) {
+			for (const key of profile.keys) {
+				key.bmp = null;
+			}
+		}
+
+		// Create app state
+		const state: AppState = {
+			profiles,
+			selectedProfileId: profiles[0]?.id || '',
+			selectedTarget: { kind: 'key', index: 0 },
+			settingsXml
+		};
+
+		// Create preview
+		const preview: ImportPreview = {
+			profileCount: profiles.length,
+			hasSettings: !!settingsXml,
+			bitmapSummary: 'none (XML-only)',
+			warnings,
+			state
+		};
+
+		return preview;
+	} catch (error) {
+		throw new Error(
+			`Failed to import XML: ${error instanceof Error ? error.message : 'Unknown error'}`
+		);
+	}
+}
+
+/**
+ * Create import preview from ZIP file without committing changes
+ */
+export async function createZipImportPreview(file: File): Promise<ImportPreview> {
 	const warnings: string[] = [];
 
 	try {
@@ -102,12 +152,8 @@ export async function importConfigZip(file: File): Promise<ImportResult> {
 			}
 		}
 
-		if (!configEntry) {
-			throw new Error('config.xml not found in ZIP file');
-		}
-
-		if (configEntry.dir) {
-			throw new Error('config.xml is a directory, not a file');
+		if (!configEntry || configEntry.dir) {
+			throw new Error('config.xml not found or is invalid in ZIP file');
 		}
 
 		const configXml = await configEntry.async('text');
@@ -116,31 +162,28 @@ export async function importConfigZip(file: File): Promise<ImportResult> {
 		const { profiles, settingsXml, warnings: parseWarnings } = parseConfigXml(configXml);
 		warnings.push(...parseWarnings);
 
-		// Load BMP files for each profile
-		for (const profile of profiles) {
-			let missingBmps = 0;
+		// Count available BMP files
+		let totalBmps = 0;
+		let foundBmps = 0;
 
+		for (const profile of profiles) {
 			for (let keyIndex = 0; keyIndex < 6; keyIndex++) {
+				totalBmps++;
 				const bmpPath = `${pathPrefix}${profile.name}/${keyIndex + 1}.bmp`;
 				const bmpEntry = zipData.files[bmpPath];
 
 				if (bmpEntry && !bmpEntry.dir) {
+					foundBmps++;
 					try {
 						const bmpData = await bmpEntry.async('uint8array');
 						profile.keys[keyIndex].bmp = bmpData;
 					} catch (error) {
-						warnings.push(
-							`Failed to load ${bmpPath}: ${error instanceof Error ? error.message : 'Unknown error'}`
-						);
-						missingBmps++;
+						warnings.push(`Failed to load ${bmpPath}`);
+						foundBmps--;
 					}
 				} else {
-					missingBmps++;
+					profile.keys[keyIndex].bmp = null;
 				}
-			}
-
-			if (missingBmps > 0) {
-				warnings.push(`Profile "${profile.name}" missing ${missingBmps} BMP file(s)`);
 			}
 		}
 
@@ -152,16 +195,34 @@ export async function importConfigZip(file: File): Promise<ImportResult> {
 			settingsXml
 		};
 
-		return { state, warnings };
+		// Create preview
+		const bitmapSummary = totalBmps > 0 ? `${foundBmps}/${totalBmps} BMPs` : 'none';
+		const preview: ImportPreview = {
+			profileCount: profiles.length,
+			hasSettings: !!settingsXml,
+			bitmapSummary,
+			warnings,
+			state
+		};
+
+		return preview;
 	} catch (error) {
 		throw new Error(
-			`Failed to import ZIP: ${error instanceof Error ? error.message : 'Unknown error'}`
+			`Failed to create import preview: ${error instanceof Error ? error.message : 'Unknown error'}`
 		);
 	}
 }
 
 /**
- * Export configuration as ZIP file
+ * Import configuration from ZIP file (deprecated - use createZipImportPreview instead)
+ */
+export async function importConfigZip(file: File): Promise<ImportResult> {
+	const preview = await createZipImportPreview(file);
+	return { state: preview.state, warnings: preview.warnings };
+}
+
+/**
+ * Export configuration as ZIP file with safe folder names
  */
 export async function exportConfigZip(state: AppState): Promise<ExportResult> {
 	const warnings: string[] = [];
@@ -174,9 +235,41 @@ export async function exportConfigZip(state: AppState): Promise<ExportResult> {
 		warnings.push(...xmlWarnings);
 		zip.file('config.xml', xmlText);
 
-		// Add BMP files for each profile
-		for (const profile of state.profiles) {
-			const profileFolder = zip.folder(profile.name);
+		// Create safe, unique folder names
+		const profileNames = state.profiles.map((p) => p.name);
+		const folderNames = createUniqueFolderNames(profileNames);
+
+		// Check if any names were sanitized or duplicated
+		let namesSanitized = false;
+		let namesDuplicated = false;
+
+		state.profiles.forEach((profile, index) => {
+			const originalName = profile.name;
+			const folderName = folderNames[`profile-${index}`];
+
+			if (sanitizeProfileName(originalName) !== originalName) {
+				namesSanitized = true;
+			}
+
+			if (folderName !== sanitizeProfileName(originalName)) {
+				namesDuplicated = true;
+			}
+		});
+
+		if (namesSanitized) {
+			warnings.push('Profile folder names were sanitized for export');
+		}
+
+		if (namesDuplicated) {
+			warnings.push('Duplicate profile names detected; folders were disambiguated');
+		}
+
+		// Add BMP files for each profile using safe folder names
+		for (let i = 0; i < state.profiles.length; i++) {
+			const profile = state.profiles[i];
+			const folderName = folderNames[`profile-${i}`];
+
+			const profileFolder = zip.folder(folderName);
 			if (!profileFolder) {
 				warnings.push(`Failed to create folder for profile "${profile.name}"`);
 				continue;
@@ -204,9 +297,7 @@ export async function exportConfigZip(state: AppState): Promise<ExportResult> {
 
 						profileFolder.file(`${keyIndex + 1}.bmp`, bmpData);
 					} catch (error) {
-						warnings.push(
-							`Failed to add BMP for key ${keyIndex + 1} in profile "${profile.name}": ${error instanceof Error ? error.message : 'Unknown error'}`
-						);
+						warnings.push(`Failed to add BMP for key ${keyIndex + 1} in profile "${profile.name}"`);
 						missingBmps++;
 					}
 				} else {
