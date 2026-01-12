@@ -3,7 +3,15 @@
 	import KeyConfigPanel from '$lib/components/KeyConfigPanel.svelte';
 	import ProfilesSidebar from '$lib/components/ProfilesSidebar.svelte';
 	import ImportPreviewModal from '$lib/components/ImportPreviewModal.svelte';
-	import type { SelectedTarget, Profile, AppState, ImportPreview } from '$lib/model/types';
+	import OnboardingModal from '$lib/components/OnboardingModal.svelte';
+	import type {
+		SelectedTarget,
+		Profile,
+		AppState,
+		ImportPreview,
+		WheelMode,
+		ActionSlot
+	} from '$lib/model/types';
 	import { isKeySelected, createEmptyProfile, generateId } from '$lib/model/types';
 	import {
 		importConfigZip,
@@ -103,6 +111,71 @@
 		return '';
 	}
 
+	// Wheel configuration handlers
+	function handleWheelModeChange(mode: string) {
+		if (selectedProfile) {
+			const updatedProfile = { ...selectedProfile, wheelMode: mode as WheelMode };
+			appState.profiles = appState.profiles.map((p) =>
+				p.id === selectedProfile.id ? updatedProfile : p
+			);
+		}
+	}
+
+	function handleWheelKeyChange(keycode: number) {
+		if (selectedProfile) {
+			const updatedProfile = { ...selectedProfile, wheelKey: keycode };
+			appState.profiles = appState.profiles.map((p) =>
+				p.id === selectedProfile.id ? updatedProfile : p
+			);
+		}
+	}
+
+	// Action slot handlers
+	function handleActionChange(actionIndex: number, action: ActionSlot) {
+		if (isKeySelected(appState.selectedTarget) && selectedProfile) {
+			const keyIndex = appState.selectedTarget.index;
+			const updatedKey = { ...selectedProfile.keys[keyIndex] };
+
+			// Ensure actions array exists and has proper length
+			if (!updatedKey.actions) {
+				updatedKey.actions = [null, null, null];
+			}
+
+			// Update the specific action
+			updatedKey.actions[actionIndex] = action;
+			// Update the profile
+			const updatedProfile = {
+				...selectedProfile,
+				keys: selectedProfile.keys.map((key, i) => (i === keyIndex ? updatedKey : key))
+			};
+
+			appState.profiles = appState.profiles.map((p) =>
+				p.id === selectedProfile.id ? updatedProfile : p
+			);
+		}
+	}
+
+	function handleActionClear(actionIndex: number) {
+		if (isKeySelected(appState.selectedTarget) && selectedProfile) {
+			const keyIndex = appState.selectedTarget.index;
+			const updatedKey = { ...selectedProfile.keys[keyIndex] };
+
+			if (updatedKey.actions) {
+				updatedKey.actions[actionIndex] = null;
+
+				// Update the profile
+				const updatedProfile = {
+					...selectedProfile,
+					keys: selectedProfile.keys.map((key, i) => (i === keyIndex ? updatedKey : key))
+				};
+
+				appState.profiles = appState.profiles.map((p) =>
+					p.id === selectedProfile.id ? updatedProfile : p
+				);
+			}
+		}
+	}
+
 	// Profile management handlers
 	function handleSelectProfile(id: string) {
 		appState.selectedProfileId = id;
@@ -195,6 +268,8 @@
 		const duplicatedProfile: Profile = {
 			id: generateId(),
 			name: generateDuplicateName(profileToDuplicate.name),
+			wheelMode: profileToDuplicate.wheelMode,
+			wheelKey: profileToDuplicate.wheelKey,
 			keys: duplicatedKeys,
 			wheelModeXml: profileToDuplicate.wheelModeXml,
 			wheelKeyXml: profileToDuplicate.wheelKeyXml
@@ -462,8 +537,13 @@
 			<h2>Configuration</h2>
 			<KeyConfigPanel
 				selectedTarget={appState.selectedTarget}
+				profile={selectedProfile}
 				label={getCurrentLabel()}
 				onLabelChange={handleLabelChange}
+				onWheelModeChange={handleWheelModeChange}
+				onWheelKeyChange={handleWheelKeyChange}
+				onActionChange={handleActionChange}
+				onActionClear={handleActionClear}
 			/>
 		</div>
 	</div>
@@ -471,6 +551,9 @@
 
 <!-- Import preview modal -->
 <ImportPreviewModal preview={importPreview} onConfirm={confirmImport} onCancel={cancelImport} />
+
+<!-- Onboarding modal -->
+<OnboardingModal />
 
 <style>
 	:global(body) {

@@ -1,4 +1,4 @@
-import type { Profile, AppState, KeyConfig } from '$lib/model/types';
+import type { Profile, AppState, KeyConfig, WheelMode, ActionSlot } from '$lib/model/types';
 import { generateId } from '$lib/model/types';
 
 interface ParseResult {
@@ -57,16 +57,42 @@ export function parseConfigXml(xmlText: string): ParseResult {
 					continue;
 				}
 
-				// Preserve wheel configuration XML
+				// Parse wheel configuration
+				let wheelMode: WheelMode = 'Clicky';
+				let wheelKey = 0;
 				let wheelModeXml: string | undefined;
 				let wheelKeyXml: string | undefined;
+
 				const wheelModeNode = profileNode.querySelector('WheelMode');
 				const wheelKeyNode = profileNode.querySelector('WheelKey');
+
 				if (wheelModeNode) {
 					wheelModeXml = new XMLSerializer().serializeToString(wheelModeNode);
+					const modeText = wheelModeNode.textContent?.trim();
+					if (modeText === 'Clicky' || modeText === 'Twist' || modeText === 'Momentum') {
+						wheelMode = modeText;
+					} else {
+						warnings.push(
+							`Profile "${name}" has invalid WheelMode "${modeText}", defaulting to Clicky`
+						);
+					}
+				} else {
+					warnings.push(`Profile "${name}" missing WheelMode, defaulting to Clicky`);
 				}
+
 				if (wheelKeyNode) {
 					wheelKeyXml = new XMLSerializer().serializeToString(wheelKeyNode);
+					const keyText = wheelKeyNode.textContent?.trim();
+					if (keyText) {
+						const parsed = parseInt(keyText, 10);
+						if (!isNaN(parsed) && parsed >= 0) {
+							wheelKey = parsed;
+						} else {
+							warnings.push(`Profile "${name}" has invalid WheelKey "${keyText}", defaulting to 0`);
+						}
+					}
+				} else {
+					warnings.push(`Profile "${name}" missing WheelKey, defaulting to 0`);
 				}
 
 				// Parse MacroButtons
@@ -80,6 +106,11 @@ export function parseConfigXml(xmlText: string): ParseResult {
 						const buttonNode = buttonNodes[j];
 						let label = '';
 						let actionsXml = '';
+						const actions: [ActionSlot, ActionSlot, ActionSlot] = [
+							{ delayMs: 0, keycode: 0 },
+							{ delayMs: 0, keycode: 0 },
+							{ delayMs: 0, keycode: 0 }
+						];
 
 						if (buttonNode) {
 							const labelNode = buttonNode.querySelector('Label');
@@ -87,8 +118,38 @@ export function parseConfigXml(xmlText: string): ParseResult {
 								label = labelNode.textContent || '';
 							}
 
-							// Preserve actions XML
+							// Parse action slots
 							const actionNodes = buttonNode.querySelectorAll('Action');
+							for (let k = 0; k < Math.min(3, actionNodes.length); k++) {
+								const actionText = actionNodes[k].textContent?.trim();
+								if (actionText) {
+									const parts = actionText.split(',');
+									if (parts.length === 2) {
+										const delayMs = parseInt(parts[0], 10);
+										const keycode = parseInt(parts[1], 10);
+										if (!isNaN(delayMs) && !isNaN(keycode) && delayMs >= 0 && keycode >= 0) {
+											actions[k] = { delayMs, keycode };
+										} else {
+											warnings.push(
+												`Profile "${name}" button ${j + 1} action ${k + 1} has invalid format "${actionText}"`
+											);
+										}
+									} else {
+										warnings.push(
+											`Profile "${name}" button ${j + 1} action ${k + 1} has invalid format "${actionText}"`
+										);
+									}
+								}
+							}
+
+							// Warn if missing actions
+							if (actionNodes.length < 3) {
+								warnings.push(
+									`Profile "${name}" button ${j + 1} has only ${actionNodes.length} actions, expected 3`
+								);
+							}
+
+							// Preserve actions XML
 							if (actionNodes.length > 0) {
 								const actionsContainer = document.createElement('Actions');
 								actionNodes.forEach((action) => {
@@ -102,6 +163,7 @@ export function parseConfigXml(xmlText: string): ParseResult {
 							label,
 							icon: getDefaultIcon(j),
 							bmp: null,
+							actions,
 							actionsXml: actionsXml || undefined
 						});
 					}
@@ -111,7 +173,12 @@ export function parseConfigXml(xmlText: string): ParseResult {
 						keys.push({
 							label: '',
 							icon: getDefaultIcon(j),
-							bmp: null
+							bmp: null,
+							actions: [
+								{ delayMs: 0, keycode: 0 },
+								{ delayMs: 0, keycode: 0 },
+								{ delayMs: 0, keycode: 0 }
+							]
 						});
 					}
 					warnings.push(`Profile "${name}" has no MacroButtons section`);
@@ -120,6 +187,8 @@ export function parseConfigXml(xmlText: string): ParseResult {
 				profiles.push({
 					id: generateId(),
 					name,
+					wheelMode,
+					wheelKey,
 					keys,
 					wheelModeXml,
 					wheelKeyXml
@@ -132,10 +201,17 @@ export function parseConfigXml(xmlText: string): ParseResult {
 			profiles.push({
 				id: generateId(),
 				name: 'Profile 1',
+				wheelMode: 'Clicky',
+				wheelKey: 0,
 				keys: Array.from({ length: 6 }, (_, i) => ({
 					label: '',
 					icon: getDefaultIcon(i),
-					bmp: null
+					bmp: null,
+					actions: [
+						{ delayMs: 0, keycode: 0 },
+						{ delayMs: 0, keycode: 0 },
+						{ delayMs: 0, keycode: 0 }
+					]
 				}))
 			});
 		}
@@ -183,45 +259,14 @@ export function buildConfigXml(state: AppState): BuildResult {
 			const profileElement = doc.createElement('Profile');
 			profileElement.setAttribute('name', profile.name);
 
-			// Add wheel configuration if preserved
-			if (profile.wheelModeXml) {
-				try {
-					const parser = new DOMParser();
-					const wheelDoc = parser.parseFromString(profile.wheelModeXml, 'application/xml');
-					const wheelNode = wheelDoc.documentElement;
-					if (wheelNode) {
-						profileElement.appendChild(doc.importNode(wheelNode, true));
-					}
-				} catch (error) {
-					warnings.push(`Failed to restore wheel mode XML for profile "${profile.name}"`);
-				}
-			}
+			// Add wheel configuration
+			const wheelMode = doc.createElement('WheelMode');
+			wheelMode.textContent = profile.wheelMode;
+			profileElement.appendChild(wheelMode);
 
-			if (profile.wheelKeyXml) {
-				try {
-					const parser = new DOMParser();
-					const wheelDoc = parser.parseFromString(profile.wheelKeyXml, 'application/xml');
-					const wheelNode = wheelDoc.documentElement;
-					if (wheelNode) {
-						profileElement.appendChild(doc.importNode(wheelNode, true));
-					}
-				} catch (error) {
-					warnings.push(`Failed to restore wheel key XML for profile "${profile.name}"`);
-				}
-			}
-
-			// Add default wheel configuration if none preserved
-			if (!profile.wheelModeXml) {
-				const wheelMode = doc.createElement('WheelMode');
-				wheelMode.textContent = 'Clicky';
-				profileElement.appendChild(wheelMode);
-			}
-
-			if (!profile.wheelKeyXml) {
-				const wheelKey = doc.createElement('WheelKey');
-				wheelKey.textContent = '0';
-				profileElement.appendChild(wheelKey);
-			}
+			const wheelKey = doc.createElement('WheelKey');
+			wheelKey.textContent = profile.wheelKey.toString();
+			profileElement.appendChild(wheelKey);
 
 			// Add MacroButtons
 			const macroButtonsElement = doc.createElement('MacroButtons');
@@ -230,27 +275,14 @@ export function buildConfigXml(state: AppState): BuildResult {
 			profile.keys.forEach((key, index) => {
 				const buttonElement = doc.createElement('MacroButton');
 
-				// Add actions (preserved or default)
-				if (key.actionsXml) {
-					try {
-						const parser = new DOMParser();
-						const actionsDoc = parser.parseFromString(key.actionsXml, 'application/xml');
-						const actionsNode = actionsDoc.documentElement;
-						if (actionsNode) {
-							const actionNodes = actionsNode.querySelectorAll('Action');
-							actionNodes.forEach((action) => {
-								buttonElement.appendChild(doc.importNode(action, true));
-							});
-						}
-					} catch (error) {
-						warnings.push(
-							`Failed to restore actions for key ${index + 1} in profile "${profile.name}"`
-						);
-						addDefaultActions(doc, buttonElement, index);
+				// Add actions (skip null actions)
+				key.actions.forEach((action) => {
+					if (action !== null) {
+						const actionElement = doc.createElement('Action');
+						actionElement.textContent = `${action.delayMs},${action.keycode}`;
+						buttonElement.appendChild(actionElement);
 					}
-				} else {
-					addDefaultActions(doc, buttonElement, index);
-				}
+				});
 
 				// Add Label
 				const labelElement = doc.createElement('Label');
@@ -301,21 +333,6 @@ function addDefaultSettings(doc: Document, root: Element): void {
 	});
 
 	root.appendChild(settings);
-}
-
-function addDefaultActions(doc: Document, buttonElement: Element, keyIndex: number): void {
-	// Add default actions based on example pattern
-	const actions = [
-		`0,${49 + keyIndex}`, // Key codes 49-54 for keys 1-6
-		'0,0',
-		'0,0'
-	];
-
-	actions.forEach((actionValue) => {
-		const action = doc.createElement('Action');
-		action.textContent = actionValue;
-		buttonElement.appendChild(action);
-	});
 }
 
 function getDefaultIcon(index: number): string {

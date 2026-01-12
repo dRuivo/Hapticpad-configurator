@@ -8,16 +8,26 @@ export function isKeySelected(target: SelectedTarget): target is { kind: 'key'; 
 	return target.kind === 'key';
 }
 
+export type WheelMode = 'Clicky' | 'Twist' | 'Momentum';
+
+export type ActionSlot = {
+	delayMs: number;
+	keycode: number;
+};
+
 export interface KeyConfig {
 	label: string;
 	icon?: string;
 	bmp?: Blob | Uint8Array | ArrayBuffer | null;
+	actions: [ActionSlot | null, ActionSlot | null, ActionSlot | null];
 	actionsXml?: string; // Preserved action XML for round-trip
 }
 
 export interface Profile {
 	id: string;
 	name: string;
+	wheelMode: WheelMode;
+	wheelKey: number;
 	keys: KeyConfig[];
 	wheelModeXml?: string; // Preserved wheel XML for round-trip
 	wheelKeyXml?: string;
@@ -107,9 +117,16 @@ export function createEmptyProfile(name: string): Profile {
 	return {
 		id: generateId(),
 		name,
+		wheelMode: 'Clicky',
+		wheelKey: 0,
 		keys: Array.from({ length: 6 }, (_, i) => ({
 			label: '',
-			icon: defaultIcons[i] || '⚙'
+			icon: defaultIcons[i] || '⚙',
+			actions: [
+				{ delayMs: 0, keycode: 0 },
+				{ delayMs: 0, keycode: 0 },
+				{ delayMs: 0, keycode: 0 }
+			]
 		}))
 	};
 }
