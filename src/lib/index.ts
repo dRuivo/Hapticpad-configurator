@@ -2,5 +2,6 @@
 
 export { default as MacropadSvg } from './components/MacropadSvg.svelte';
 export { default as KeyConfigPanel } from './components/KeyConfigPanel.svelte';
-export type { SelectedTarget } from './model/types.js';
-export { isWheelSelected, isKeySelected } from './model/types.js';
+export { default as ProfilesSidebar } from './components/ProfilesSidebar.svelte';
+export type { SelectedTarget, Profile, KeyConfig, AppState } from './model/types.js';
+export { isWheelSelected, isKeySelected, createEmptyProfile, generateId } from './model/types.js';

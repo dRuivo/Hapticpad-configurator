@@ -1,33 +1,102 @@
 <script lang="ts">
 	import MacropadSvg from '$lib/components/MacropadSvg.svelte';
 	import KeyConfigPanel from '$lib/components/KeyConfigPanel.svelte';
-	import type { SelectedTarget } from '$lib/model/types';
-	import { isKeySelected } from '$lib/model/types';
+	import ProfilesSidebar from '$lib/components/ProfilesSidebar.svelte';
+	import type { SelectedTarget, Profile, AppState } from '$lib/model/types';
+	import { isKeySelected, createEmptyProfile, generateId } from '$lib/model/types';
 
-	// App state
-	let selectedTarget = $state<SelectedTarget>({ kind: 'key', index: 0 });
-	let labels = $state(['', '', '', '', '', '']);
-	let icons = $state(['⬆', '⬇', '📋', '⌨', '🖱', '⚙']);
+	// Initialize app state
+	const initialProfile = createEmptyProfile('Profile 1');
+	let appState = $state<AppState>({
+		profiles: [initialProfile],
+		selectedProfileId: initialProfile.id,
+		selectedTarget: { kind: 'key', index: 0 }
+	});
+
+	// Computed values
+	const selectedProfile = $derived(
+		appState.profiles.find((p) => p.id === appState.selectedProfileId) || appState.profiles[0]
+	);
+	const labels = $derived(selectedProfile?.keys.map((k) => k.label) || []);
+	const icons = $derived(selectedProfile?.keys.map((k) => k.icon || '') || []);
 
 	function handleWheelSelect() {
-		selectedTarget = { kind: 'wheel' };
+		appState.selectedTarget = { kind: 'wheel' };
 	}
 
 	function handleKeySelect(index: number) {
-		selectedTarget = { kind: 'key', index };
+		appState.selectedTarget = { kind: 'key', index };
 	}
 
 	function handleLabelChange(value: string) {
-		if (isKeySelected(selectedTarget)) {
-			labels[selectedTarget.index] = value;
+		if (isKeySelected(appState.selectedTarget) && selectedProfile) {
+			const keyIndex = appState.selectedTarget.index;
+			// Create new profile with updated key
+			const updatedProfile = {
+				...selectedProfile,
+				keys: selectedProfile.keys.map((key, i) =>
+					i === keyIndex ? { ...key, label: value } : key
+				)
+			};
+			// Update profiles array
+			appState.profiles = appState.profiles.map((p) =>
+				p.id === selectedProfile.id ? updatedProfile : p
+			);
 		}
 	}
 
 	function getCurrentLabel(): string {
-		if (isKeySelected(selectedTarget)) {
-			return labels[selectedTarget.index];
+		if (isKeySelected(appState.selectedTarget) && selectedProfile) {
+			return selectedProfile.keys[appState.selectedTarget.index]?.label || '';
 		}
 		return '';
+	}
+
+	// Profile management handlers
+	function handleSelectProfile(id: string) {
+		appState.selectedProfileId = id;
+	}
+
+	function handleAddProfile() {
+		if (appState.profiles.length >= 128) return;
+
+		const newProfile = createEmptyProfile(`Profile ${appState.profiles.length + 1}`);
+		appState.profiles = [...appState.profiles, newProfile];
+		appState.selectedProfileId = newProfile.id;
+	}
+
+	function handleRemoveProfile(id: string) {
+		if (appState.profiles.length <= 1) return;
+
+		const currentIndex = appState.profiles.findIndex((p) => p.id === id);
+		const newProfiles = appState.profiles.filter((p) => p.id !== id);
+
+		// Select neighbor profile if we're removing the selected one
+		if (id === appState.selectedProfileId) {
+			const newSelectedIndex = Math.min(currentIndex, newProfiles.length - 1);
+			appState.selectedProfileId = newProfiles[newSelectedIndex].id;
+		}
+
+		appState.profiles = newProfiles;
+	}
+
+	function handleRenameProfile(id: string, newName: string) {
+		appState.profiles = appState.profiles.map((p) => (p.id === id ? { ...p, name: newName } : p));
+	}
+
+	function handleMoveProfile(id: string, direction: 'up' | 'down') {
+		const currentIndex = appState.profiles.findIndex((p) => p.id === id);
+		if (currentIndex === -1) return;
+
+		const newIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+		if (newIndex < 0 || newIndex >= appState.profiles.length) return;
+
+		const newProfiles = [...appState.profiles];
+		[newProfiles[currentIndex], newProfiles[newIndex]] = [
+			newProfiles[newIndex],
+			newProfiles[currentIndex]
+		];
+		appState.profiles = newProfiles;
 	}
 </script>
 
@@ -43,10 +112,22 @@
 	</header>
 
 	<div class="content">
+		<!-- Profiles sidebar -->
+		<ProfilesSidebar
+			profiles={appState.profiles}
+			selectedProfileId={appState.selectedProfileId}
+			onSelectProfile={handleSelectProfile}
+			onAddProfile={handleAddProfile}
+			onRemoveProfile={handleRemoveProfile}
+			onRenameProfile={handleRenameProfile}
+			onMoveProfile={handleMoveProfile}
+		/>
+
+		<!-- Device preview -->
 		<div class="macropad-section">
 			<h2>Device Preview</h2>
 			<MacropadSvg
-				{selectedTarget}
+				selectedTarget={appState.selectedTarget}
 				{labels}
 				{icons}
 				onSelectWheel={handleWheelSelect}
@@ -54,10 +135,11 @@
 			/>
 		</div>
 
+		<!-- Configuration panel -->
 		<div class="config-section">
 			<h2>Configuration</h2>
 			<KeyConfigPanel
-				{selectedTarget}
+				selectedTarget={appState.selectedTarget}
 				label={getCurrentLabel()}
 				onLabelChange={handleLabelChange}
 			/>
@@ -74,15 +156,20 @@
 	}
 
 	.container {
-		max-width: 1200px;
-		margin: 0 auto;
-		padding: 20px;
+		max-width: none;
+		margin: 0;
+		padding: 0;
 		min-height: 100vh;
+		display: flex;
+		flex-direction: column;
 	}
 
 	header {
 		text-align: center;
-		margin-bottom: 40px;
+		padding: 20px;
+		background: #f8f9fa;
+		border-bottom: 1px solid #e2e8f0;
+		flex-shrink: 0;
 	}
 
 	header h1 {
@@ -100,9 +187,17 @@
 
 	.content {
 		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 40px;
+		grid-template-columns: auto 1fr 1fr;
+		gap: 0;
 		align-items: start;
+		height: 100vh;
+	}
+
+	.macropad-section,
+	.config-section {
+		padding: 20px;
+		height: 100vh;
+		overflow-y: auto;
 	}
 
 	.macropad-section h2,
@@ -116,21 +211,28 @@
 	/* Responsive layout */
 	@media (max-width: 768px) {
 		.container {
-			padding: 15px;
-		}
-
-		header h1 {
-			font-size: 2rem;
+			padding: 0;
 		}
 
 		.content {
 			grid-template-columns: 1fr;
-			gap: 30px;
+			grid-template-rows: auto auto 1fr;
+			height: auto;
 		}
 
-		.macropad-section h2,
-		.config-section h2 {
-			font-size: 1.3rem;
+		.macropad-section,
+		.config-section {
+			height: auto;
+			padding: 15px;
+		}
+
+		header {
+			padding: 15px;
+			margin-bottom: 0;
+		}
+
+		header h1 {
+			font-size: 1.8rem;
 		}
 	}
 
