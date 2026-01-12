@@ -11,18 +11,23 @@ export function isKeySelected(target: SelectedTarget): target is { kind: 'key'; 
 export interface KeyConfig {
 	label: string;
 	icon?: string;
+	bmp?: Blob | Uint8Array | ArrayBuffer | null;
+	actionsXml?: string; // Preserved action XML for round-trip
 }
 
 export interface Profile {
 	id: string;
 	name: string;
 	keys: KeyConfig[];
+	wheelModeXml?: string; // Preserved wheel XML for round-trip
+	wheelKeyXml?: string;
 }
 
 export interface AppState {
 	profiles: Profile[];
 	selectedProfileId: string;
 	selectedTarget: SelectedTarget;
+	settingsXml?: string; // Preserved settings XML for round-trip
 }
 
 // Utility function to generate unique IDs

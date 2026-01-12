@@ -4,6 +4,12 @@
 	import ProfilesSidebar from '$lib/components/ProfilesSidebar.svelte';
 	import type { SelectedTarget, Profile, AppState } from '$lib/model/types';
 	import { isKeySelected, createEmptyProfile, generateId } from '$lib/model/types';
+	import {
+		importConfigZip,
+		exportConfigZip,
+		exportConfigXml,
+		downloadBlob
+	} from '$lib/io/configZip';
 
 	// Initialize app state
 	const initialProfile = createEmptyProfile('Profile 1');
@@ -12,6 +18,16 @@
 		selectedProfileId: initialProfile.id,
 		selectedTarget: { kind: 'key', index: 0 }
 	});
+
+	// Status messages
+	type StatusType = 'success' | 'error' | 'warning';
+	interface StatusMessage {
+		type: StatusType;
+		message: string;
+		details?: string[];
+	}
+	let statusMessage = $state<StatusMessage | null>(null);
+	let fileInput: HTMLInputElement;
 
 	// Computed values
 	const selectedProfile = $derived(
@@ -98,6 +114,96 @@
 		];
 		appState.profiles = newProfiles;
 	}
+
+	// Import/Export handlers
+	function clearStatus() {
+		statusMessage = null;
+	}
+
+	function setStatus(type: StatusType, message: string, details?: string[]) {
+		statusMessage = { type, message, details };
+		// Auto-clear success messages after 5 seconds
+		if (type === 'success') {
+			setTimeout(() => {
+				if (statusMessage?.type === 'success') {
+					statusMessage = null;
+				}
+			}, 5000);
+		}
+	}
+
+	function handleImportClick() {
+		fileInput.click();
+	}
+
+	async function handleFileChange(event: Event) {
+		const input = event.target as HTMLInputElement;
+		if (!input.files || input.files.length === 0) return;
+
+		const file = input.files[0];
+		if (!file.name.toLowerCase().endsWith('.zip')) {
+			setStatus('error', 'Please select a .zip file');
+			return;
+		}
+
+		try {
+			clearStatus();
+			const { state, warnings } = await importConfigZip(file);
+
+			// Update app state
+			appState = state;
+
+			// Show success with warnings if any
+			if (warnings.length > 0) {
+				setStatus(
+					'warning',
+					`Imported ${state.profiles.length} profile(s) with ${warnings.length} warning(s)`,
+					warnings
+				);
+			} else {
+				setStatus('success', `Successfully imported ${state.profiles.length} profile(s)`);
+			}
+		} catch (error) {
+			setStatus('error', error instanceof Error ? error.message : 'Import failed');
+		} finally {
+			// Clear file input
+			input.value = '';
+		}
+	}
+
+	async function handleExportZip() {
+		try {
+			clearStatus();
+			const { blob, warnings } = await exportConfigZip(appState);
+
+			downloadBlob(blob, 'macropad-config.zip');
+
+			if (warnings.length > 0) {
+				setStatus('warning', 'ZIP exported with warnings', warnings);
+			} else {
+				setStatus('success', 'ZIP configuration exported successfully');
+			}
+		} catch (error) {
+			setStatus('error', error instanceof Error ? error.message : 'Export failed');
+		}
+	}
+
+	async function handleExportXml() {
+		try {
+			clearStatus();
+			const { blob, warnings } = await exportConfigXml(appState);
+
+			downloadBlob(blob, 'macropad-config.xml');
+
+			if (warnings.length > 0) {
+				setStatus('warning', 'XML exported with warnings', warnings);
+			} else {
+				setStatus('success', 'XML configuration exported successfully');
+			}
+		} catch (error) {
+			setStatus('error', error instanceof Error ? error.message : 'Export failed');
+		}
+	}
 </script>
 
 <svelte:head>
@@ -106,10 +212,52 @@
 </svelte:head>
 
 <main class="container">
-	<header>
-		<h1>Haptic Macro Pad Configurator</h1>
-		<p>Select a component to configure its settings</p>
+	<!-- Import/Export Header -->
+	<header class="import-export-header">
+		<div class="header-content">
+			<div class="title-section">
+				<h1>Haptic Macro Pad Configurator</h1>
+				<p>Select a component to configure its settings</p>
+			</div>
+
+			<div class="import-export-controls">
+				<button class="import-button" onclick={handleImportClick}> 📁 Import (.zip) </button>
+				<button class="export-button" onclick={handleExportZip}> 📦 Export (.zip) </button>
+				<button class="export-button secondary" onclick={handleExportXml}>
+					📄 Export (XML only)
+				</button>
+			</div>
+		</div>
+
+		<!-- Status area -->
+		{#if statusMessage}
+			<div class="status-area status-{statusMessage.type}">
+				<div class="status-content">
+					<span class="status-message">{statusMessage.message}</span>
+					<button class="status-close" onclick={clearStatus}>×</button>
+				</div>
+				{#if statusMessage.details && statusMessage.details.length > 0}
+					<div class="status-details">
+						{#each statusMessage.details.slice(0, 3) as detail}
+							<div class="status-detail">• {detail}</div>
+						{/each}
+						{#if statusMessage.details.length > 3}
+							<div class="status-detail">• and {statusMessage.details.length - 3} more...</div>
+						{/if}
+					</div>
+				{/if}
+			</div>
+		{/if}
 	</header>
+
+	<!-- Hidden file input -->
+	<input
+		bind:this={fileInput}
+		type="file"
+		accept=".zip"
+		onchange={handleFileChange}
+		style="display: none;"
+	/>
 
 	<div class="content">
 		<!-- Profiles sidebar -->
@@ -164,12 +312,173 @@
 		flex-direction: column;
 	}
 
-	header {
-		text-align: center;
-		padding: 20px;
-		background: #f8f9fa;
-		border-bottom: 1px solid #e2e8f0;
+	.import-export-header {
+		background: #fff;
+		border-bottom: 2px solid #e2e8f0;
 		flex-shrink: 0;
+		box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+	}
+
+	.header-content {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 20px;
+		max-width: 1400px;
+		margin: 0 auto;
+		gap: 20px;
+	}
+
+	.title-section {
+		flex: 1;
+	}
+
+	.title-section h1 {
+		margin: 0 0 5px 0;
+		font-size: 1.8rem;
+		color: #2d3748;
+		font-weight: 700;
+	}
+
+	.title-section p {
+		margin: 0;
+		font-size: 0.9rem;
+		color: #718096;
+	}
+
+	.import-export-controls {
+		display: flex;
+		gap: 12px;
+		align-items: center;
+	}
+
+	.import-button,
+	.export-button {
+		padding: 10px 16px;
+		border: none;
+		border-radius: 6px;
+		font-size: 14px;
+		font-weight: 600;
+		cursor: pointer;
+		transition: all 0.2s ease;
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		min-width: 140px;
+		justify-content: center;
+	}
+
+	.import-button {
+		background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+		color: white;
+		box-shadow: 0 2px 4px rgba(52, 152, 219, 0.3);
+	}
+
+	.import-button:hover {
+		background: linear-gradient(135deg, #2980b9 0%, #1f6ba6 100%);
+		transform: translateY(-1px);
+		box-shadow: 0 4px 8px rgba(52, 152, 219, 0.4);
+	}
+
+	.export-button {
+		background: linear-gradient(135deg, #27ae60 0%, #229954 100%);
+		color: white;
+		box-shadow: 0 2px 4px rgba(39, 174, 96, 0.3);
+	}
+
+	.export-button:hover {
+		background: linear-gradient(135deg, #229954 0%, #1e7e34 100%);
+		transform: translateY(-1px);
+		box-shadow: 0 4px 8px rgba(39, 174, 96, 0.4);
+	}
+
+	.export-button.secondary {
+		background: linear-gradient(135deg, #8e44ad 0%, #7d3c98 100%);
+		box-shadow: 0 2px 4px rgba(142, 68, 173, 0.3);
+	}
+
+	.export-button.secondary:hover {
+		background: linear-gradient(135deg, #7d3c98 0%, #6c3483 100%);
+		box-shadow: 0 4px 8px rgba(142, 68, 173, 0.4);
+	}
+
+	/* Status area styles */
+	.status-area {
+		padding: 12px 20px;
+		margin: 0;
+		border-top: 1px solid #e2e8f0;
+		animation: slideDown 0.3s ease;
+	}
+
+	.status-success {
+		background: #d4edda;
+		color: #155724;
+		border-left: 4px solid #28a745;
+	}
+
+	.status-error {
+		background: #f8d7da;
+		color: #721c24;
+		border-left: 4px solid #dc3545;
+	}
+
+	.status-warning {
+		background: #fff3cd;
+		color: #856404;
+		border-left: 4px solid #ffc107;
+	}
+
+	.status-content {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 12px;
+	}
+
+	.status-message {
+		font-weight: 600;
+		flex: 1;
+	}
+
+	.status-close {
+		background: none;
+		border: none;
+		font-size: 18px;
+		cursor: pointer;
+		padding: 0;
+		width: 24px;
+		height: 24px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		border-radius: 50%;
+		transition: background-color 0.2s ease;
+		color: inherit;
+	}
+
+	.status-close:hover {
+		background-color: rgba(0, 0, 0, 0.1);
+	}
+
+	.status-details {
+		margin-top: 8px;
+		font-size: 13px;
+		opacity: 0.9;
+	}
+
+	.status-detail {
+		margin: 2px 0;
+	}
+
+	@keyframes slideDown {
+		from {
+			max-height: 0;
+			opacity: 0;
+		}
+		to {
+			max-height: 200px;
+			opacity: 1;
+		}
 	}
 
 	header h1 {
@@ -210,8 +519,31 @@
 
 	/* Responsive layout */
 	@media (max-width: 768px) {
-		.container {
-			padding: 0;
+		.header-content {
+			flex-direction: column;
+			align-items: stretch;
+			gap: 16px;
+			padding: 16px;
+		}
+
+		.title-section {
+			text-align: center;
+		}
+
+		.title-section h1 {
+			font-size: 1.6rem;
+		}
+
+		.import-export-controls {
+			justify-content: center;
+			flex-wrap: wrap;
+		}
+
+		.import-button,
+		.export-button {
+			min-width: 120px;
+			font-size: 13px;
+			padding: 8px 12px;
 		}
 
 		.content {
@@ -225,28 +557,25 @@
 			height: auto;
 			padding: 15px;
 		}
-
-		header {
-			padding: 15px;
-			margin-bottom: 0;
-		}
-
-		header h1 {
-			font-size: 1.8rem;
-		}
 	}
 
 	@media (max-width: 480px) {
-		.container {
-			padding: 10px;
+		.title-section h1 {
+			font-size: 1.5rem;
 		}
 
-		header h1 {
-			font-size: 1.8rem;
+		.title-section p {
+			font-size: 0.85rem;
 		}
 
-		header p {
-			font-size: 1rem;
+		.import-export-controls {
+			flex-direction: column;
+		}
+
+		.import-button,
+		.export-button {
+			width: 100%;
+			min-width: auto;
 		}
 	}
 </style>
