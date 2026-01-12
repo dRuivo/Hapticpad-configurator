@@ -179,6 +179,25 @@
 		}
 	}
 
+	// Capture handlers
+	function handleWheelKeyCaptured(keycode: number) {
+		// Already handled by onWheelKeyChange
+		setStatus('success', `Wheel key captured: ${keycode}`);
+	}
+
+	function handleActionCaptured(actionIndex: number, action: ActionSlot) {
+		// Already handled by onActionChange
+		setStatus('success', `Action ${actionIndex + 1} captured: keycode ${action.keycode}`);
+	}
+
+	function handleActionChordCaptured(
+		actions: [ActionSlot | null, ActionSlot | null, ActionSlot | null]
+	) {
+		// Already handled by onActionChange for each slot
+		const keycodes = actions.map((a) => a?.keycode ?? '—').join(', ');
+		setStatus('success', `Key chord captured: [${keycodes}]`);
+	}
+
 	// Profile management handlers
 	function handleSelectProfile(id: string) {
 		appState.selectedProfileId = id;
@@ -552,6 +571,9 @@
 				onWheelKeyChange={handleWheelKeyChange}
 				onActionChange={handleActionChange}
 				onActionClear={handleActionClear}
+				onWheelKeyCaptured={handleWheelKeyCaptured}
+				onActionCaptured={handleActionCaptured}
+				onActionChordCaptured={handleActionChordCaptured}
 			/>
 		</div>
 	</div>

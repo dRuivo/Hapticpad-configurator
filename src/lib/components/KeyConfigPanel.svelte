@@ -2,6 +2,7 @@
 	import type { SelectedTarget, WheelMode, ActionSlot, Profile } from '$lib/model/types';
 	import { isWheelSelected, isKeySelected } from '$lib/model/types';
 	import { getKeycodeDisplayName } from '$lib/keycodes/map';
+	import KeyCaptureModal from './KeyCaptureModal.svelte';
 
 	interface Props {
 		selectedTarget: SelectedTarget;
@@ -15,6 +16,11 @@
 		onWheelKeyChange?: (keycode: number) => void;
 		onActionChange?: (index: number, action: ActionSlot) => void;
 		onActionClear?: (index: number) => void;
+		onWheelKeyCaptured?: (keycode: number) => void;
+		onActionCaptured?: (actionIndex: number, action: ActionSlot) => void;
+		onActionChordCaptured?: (
+			actions: [ActionSlot | null, ActionSlot | null, ActionSlot | null]
+		) => void;
 	}
 
 	let {
@@ -28,8 +34,28 @@
 		onWheelModeChange,
 		onWheelKeyChange,
 		onActionChange,
-		onActionClear
+		onActionClear,
+		onWheelKeyCaptured,
+		onActionCaptured,
+		onActionChordCaptured
 	}: Props = $props();
+
+	// Type definitions for capture payloads
+	interface WheelPayload {
+		type: 'wheel';
+		wheelKey: number;
+	}
+
+	interface MacroPayload {
+		type: 'macro';
+		actionIndex?: number;
+		keyCode?: number;
+		actions?: [ActionSlot | null, ActionSlot | null, ActionSlot | null];
+	}
+
+	let captureModalOpen = $state(false);
+	let captureMode = $state<'wheel' | 'macro'>('wheel');
+	let captureActionIndex = $state<number | undefined>(undefined);
 
 	// Get actual wheel config from profile
 	const actualWheelMode = $derived(profile?.wheelMode || wheelMode);
@@ -80,9 +106,46 @@
 		onActionClear?.(index);
 	}
 
-	function handleCaptureKeybind() {
-		// Placeholder for future keybind capture functionality
-		alert('Keybind capture functionality coming soon!');
+	function startWheelKeyCapture() {
+		captureMode = 'wheel';
+		captureActionIndex = undefined;
+		captureModalOpen = true;
+	}
+
+	function startActionCapture(index: number) {
+		captureMode = 'macro';
+		captureActionIndex = index;
+		captureModalOpen = true;
+	}
+
+	function handleCaptureCancel() {
+		captureModalOpen = false;
+		captureActionIndex = undefined;
+	}
+
+	function handleCaptureConfirm(payload: WheelPayload | MacroPayload) {
+		if (payload.type === 'wheel') {
+			onWheelKeyCaptured?.(payload.wheelKey);
+			onWheelKeyChange?.(payload.wheelKey);
+		} else if (payload.type === 'macro') {
+			if (payload.actions) {
+				// Chord capture - all 3 slots
+				onActionChordCaptured?.(payload.actions);
+				payload.actions.forEach((action, i) => {
+					if (action) {
+						onActionChange?.(i, action);
+					}
+				});
+			} else if (payload.actionIndex !== undefined && payload.keyCode !== undefined) {
+				// Single slot capture
+				const action: ActionSlot = { delayMs: 0, keycode: payload.keyCode };
+				onActionCaptured?.(payload.actionIndex, action);
+				onActionChange?.(payload.actionIndex, action);
+			}
+		}
+
+		captureModalOpen = false;
+		captureActionIndex = undefined;
 	}
 </script>
 
@@ -111,6 +174,13 @@
 					placeholder="0"
 				/>
 				<span class="keycode-display">{getKeycodeDisplayName(actualWheelKey)}</span>
+				<button
+					class="capture-button"
+					onclick={startWheelKeyCapture}
+					title="Capture a key for wheel"
+				>
+					🎤
+				</button>
 			</div>
 			<div class="helper-text">
 				Keycode from <a
@@ -168,6 +238,13 @@
 								</div>
 							</div>
 							<button
+								class="capture-button"
+								onclick={() => startActionCapture(index)}
+								title="Capture a key for action {index + 1}"
+							>
+								🎤
+							</button>
+							<button
 								class="clear-button"
 								onclick={() => clearAction(index)}
 								aria-label="Clear action {index + 1}"
@@ -184,6 +261,18 @@
 		</div>
 	{/if}
 </div>
+
+<KeyCaptureModal
+	isOpen={captureModalOpen}
+	mode={captureMode}
+	context={{
+		profileName: profile?.name || 'Unknown',
+		keyIndex: isKeySelected(selectedTarget) ? selectedTarget.index : -1,
+		actionIndex: captureActionIndex ?? -1
+	}}
+	onCancel={handleCaptureCancel}
+	onConfirm={handleCaptureConfirm}
+/>
 
 <style>
 	.config-panel {
@@ -328,6 +417,25 @@
 	.clear-button:hover {
 		background: #c53030;
 		transform: translateY(-1px);
+	}
+
+	.capture-button {
+		background: #3498db;
+		color: white;
+		border: none;
+		padding: 8px 12px;
+		border-radius: 6px;
+		font-size: 14px;
+		cursor: pointer;
+		transition: all 0.2s ease;
+		height: fit-content;
+		white-space: nowrap;
+	}
+
+	.capture-button:hover {
+		background: #2980b9;
+		transform: translateY(-1px);
+		box-shadow: 0 4px 8px rgba(52, 152, 219, 0.3);
 	}
 
 	.action-preview {
