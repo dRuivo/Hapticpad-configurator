@@ -38,6 +38,9 @@
 	let importPreview = $state<ImportPreview | null>(null);
 	let pendingImport = $state<{ type: 'zip' | 'xml'; preview: ImportPreview } | null>(null);
 
+	// Auto-rename state for duplicated profiles
+	let triggerRename = $state<string | null>(null);
+
 	// Computed values
 	const selectedProfile = $derived(
 		appState.profiles.find((p) => p.id === appState.selectedProfileId) || appState.profiles[0]
@@ -52,9 +55,19 @@
 		appState.selectedProfileId;
 		appState.selectedTarget;
 
-		// Only mark dirty if not already dirty to avoid infinite loop
-		if (!appState.isDirty) {
-			appState.isDirty = true;
+		// Always mark dirty when these change
+		appState.isDirty = true;
+	});
+
+	// Clear triggerRename after a short delay to allow the effect to be processed
+	$effect(() => {
+		const currentTrigger = triggerRename;
+		if (currentTrigger) {
+			setTimeout(() => {
+				if (triggerRename === currentTrigger) {
+					triggerRename = null;
+				}
+			}, 100);
 		}
 	});
 
@@ -135,6 +148,85 @@
 			newProfiles[currentIndex]
 		];
 		appState.profiles = newProfiles;
+	}
+
+	function generateDuplicateName(baseName: string): string {
+		const names = new Set(appState.profiles.map((p) => p.name));
+		let duplicateName = `${baseName} (copy)`;
+		let counter = 2;
+
+		while (names.has(duplicateName)) {
+			duplicateName = `${baseName} (copy ${counter})`;
+			counter++;
+		}
+
+		return duplicateName;
+	}
+
+	function duplicateProfile(id: string): Profile {
+		const profileToDuplicate = appState.profiles.find((p) => p.id === id);
+		if (!profileToDuplicate) {
+			throw new Error('Profile not found');
+		}
+
+		// Deep clone the profile with new ID and name
+		const duplicatedKeys = profileToDuplicate.keys.map((key) => {
+			let duplicatedBmp: typeof key.bmp = undefined;
+
+			if (key.bmp) {
+				if (key.bmp instanceof Uint8Array) {
+					duplicatedBmp = new Uint8Array(key.bmp);
+				} else if (key.bmp instanceof ArrayBuffer) {
+					duplicatedBmp = key.bmp.slice(0);
+				} else if (key.bmp instanceof Blob) {
+					// For Blob, we keep the reference since Blob is immutable
+					duplicatedBmp = key.bmp;
+				} else {
+					duplicatedBmp = key.bmp;
+				}
+			}
+
+			return {
+				...key,
+				bmp: duplicatedBmp
+			};
+		});
+
+		const duplicatedProfile: Profile = {
+			id: generateId(),
+			name: generateDuplicateName(profileToDuplicate.name),
+			keys: duplicatedKeys,
+			wheelModeXml: profileToDuplicate.wheelModeXml,
+			wheelKeyXml: profileToDuplicate.wheelKeyXml
+		};
+
+		return duplicatedProfile;
+	}
+
+	function handleDuplicateProfile(id: string) {
+		if (appState.profiles.length >= 128) return;
+
+		try {
+			const duplicatedProfile = duplicateProfile(id);
+
+			// Add the duplicated profile after the original
+			const originalIndex = appState.profiles.findIndex((p) => p.id === id);
+			const newProfiles = [...appState.profiles];
+			newProfiles.splice(originalIndex + 1, 0, duplicatedProfile);
+
+			appState.profiles = newProfiles;
+			appState.selectedProfileId = duplicatedProfile.id;
+
+			// Trigger auto-rename for the duplicated profile
+			triggerRename = duplicatedProfile.id;
+
+			setStatus('success', `Profile "${duplicatedProfile.name}" created successfully`);
+		} catch (error) {
+			setStatus(
+				'error',
+				`Failed to duplicate profile: ${error instanceof Error ? error.message : 'Unknown error'}`
+			);
+		}
 	}
 
 	// Import/Export handlers
@@ -347,6 +439,8 @@
 			onRemoveProfile={handleRemoveProfile}
 			onRenameProfile={handleRenameProfile}
 			onMoveProfile={handleMoveProfile}
+			onDuplicateProfile={handleDuplicateProfile}
+			{triggerRename}
 		/>
 
 		<!-- Device preview -->
@@ -356,8 +450,10 @@
 				selectedTarget={appState.selectedTarget}
 				{labels}
 				{icons}
+				profile={selectedProfile}
 				onSelectWheel={handleWheelSelect}
 				onSelectKey={handleKeySelect}
+				onIconDecodeError={(error) => setStatus('error', `Icon decode error: ${error}`)}
 			/>
 		</div>
 

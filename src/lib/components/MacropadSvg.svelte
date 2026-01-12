@@ -1,21 +1,131 @@
 <script lang="ts">
-	import type { SelectedTarget } from '$lib/model/types';
+	import type { SelectedTarget, Profile } from '$lib/model/types';
+	import { decodeBmp, type DecodedBmp } from '$lib/graphics/bmp';
+	import { rgbaToPngDataUrlSync } from '$lib/graphics/raster';
+	import { browser } from '$app/environment';
 
 	interface Props {
 		selectedTarget: SelectedTarget;
 		labels: string[];
 		icons?: string[];
+		profile?: Profile;
 		onSelectWheel: () => void;
 		onSelectKey: (index: number) => void;
+		onIconDecodeError?: (error: string) => void;
 	}
 
 	let {
 		selectedTarget,
 		labels,
 		icons = ['⬆', '⬇', '📋', '⌨', '🖱', '⚙'],
+		profile,
 		onSelectWheel,
-		onSelectKey
+		onSelectKey,
+		onIconDecodeError
 	}: Props = $props();
+
+	// Icon cache to avoid re-decoding on every render
+	let iconCache = $state<Map<string, string | null>>(new Map());
+	let errorCount = $state(0);
+	const MAX_ERROR_REPORTS = 3;
+
+	// Compute cache key for profile + key index
+	function getCacheKey(profileId: string, keyIndex: number, bmpLength: number): string {
+		return `${profileId}-${keyIndex}-${bmpLength}`;
+	}
+
+	// Decode BMP to data URL with caching (pure function - no state mutations)
+	function getIconDataUrl(keyIndex: number): string | null {
+		if (!browser || !profile?.keys[keyIndex]?.bmp) {
+			return null;
+		}
+
+		const bmp = profile.keys[keyIndex].bmp;
+		if (!bmp) return null;
+
+		const bmpLength =
+			bmp instanceof Uint8Array
+				? bmp.length
+				: bmp instanceof ArrayBuffer
+					? bmp.byteLength
+					: bmp instanceof Blob
+						? bmp.size
+						: 0;
+
+		const cacheKey = getCacheKey(profile.id, keyIndex, bmpLength);
+
+		// Check cache first
+		if (iconCache.has(cacheKey)) {
+			return iconCache.get(cacheKey) || null;
+		}
+
+		// If not in cache, return null and schedule async decoding
+		if (!bmp) return null;
+
+		scheduleIconDecode(keyIndex, cacheKey);
+		return null;
+	}
+
+	// Schedule icon decoding in an effect (can mutate state)
+	function scheduleIconDecode(keyIndex: number, cacheKey: string) {
+		if (!profile?.keys[keyIndex]?.bmp) return;
+
+		const bmp = profile.keys[keyIndex].bmp;
+		if (!bmp) return;
+
+		// Use setTimeout to avoid mutating state in template
+		setTimeout(() => {
+			// Double check we still need this
+			if (iconCache.has(cacheKey)) return;
+
+			try {
+				let bmpData: Uint8Array;
+
+				if (bmp instanceof Uint8Array) {
+					bmpData = bmp;
+				} else if (bmp instanceof ArrayBuffer) {
+					bmpData = new Uint8Array(bmp);
+				} else {
+					// For Blob, we can't decode synchronously
+					iconCache.set(cacheKey, null);
+					return;
+				}
+
+				const decoded = decodeBmp(bmpData);
+				const dataUrl = rgbaToPngDataUrlSync(decoded.rgba, decoded.width, decoded.height);
+
+				iconCache.set(cacheKey, dataUrl);
+			} catch (error) {
+				// Cache the failure to avoid retrying
+				iconCache.set(cacheKey, null);
+
+				// Report error (but limit spam)
+				if (errorCount < MAX_ERROR_REPORTS && onIconDecodeError) {
+					errorCount++;
+					const errorMsg = `Failed to decode icon for key ${keyIndex + 1}: ${error instanceof Error ? error.message : 'Unknown error'}`;
+					onIconDecodeError(errorMsg);
+				}
+			}
+		}, 0);
+	}
+
+	// Clear cache when profile changes
+	let currentProfileId = $state<string | undefined>(undefined);
+	$effect(() => {
+		if (profile?.id && profile.id !== currentProfileId) {
+			// Profile changed - clear cache for old profile
+			const oldCache = iconCache;
+			const newCache = new Map<string, string | null>();
+			for (const [key, value] of oldCache) {
+				if (key.startsWith(profile.id + '-')) {
+					newCache.set(key, value);
+				}
+			}
+			iconCache = newCache;
+			errorCount = 0; // Reset error count for new profile
+			currentProfileId = profile.id;
+		}
+	});
 
 	function handleWheelClick() {
 		onSelectWheel();
@@ -109,13 +219,50 @@
 				{@const displayCol = i % 3}
 				{@const displayX = 230 + displayCol * 43}
 				{@const displayY = 125 + displayRow * 35}
+				{@const iconDataUrl = getIconDataUrl(i)}
 
 				<g class="display-item">
 					<!-- Item background -->
 					<rect x={displayX} y={displayY} width="40" height="30" rx="3" class="display-item-bg" />
 
-					<!-- Icon -->
-					<text x={displayX + 8} y={displayY + 12} class="display-icon">{icons[i]}</text>
+					<!-- Icon (BMP or fallback) -->
+					{#if iconDataUrl}
+						<!-- Real BMP icon -->
+						<image
+							href={iconDataUrl}
+							x={displayX + 2}
+							y={displayY + 2}
+							width="24"
+							height="18"
+							preserveAspectRatio="xMidYMid meet"
+							class="display-bmp-icon"
+						/>
+					{:else if profile?.keys[i]?.bmp}
+						<!-- BMP failed to decode - show error placeholder -->
+						<rect
+							x={displayX + 4}
+							y={displayY + 4}
+							width="20"
+							height="14"
+							rx="2"
+							class="display-icon-error"
+						/>
+						<text x={displayX + 14} y={displayY + 13} class="display-icon-error-text">✕</text>
+					{:else if icons[i]}
+						<!-- Fallback to text icon if available -->
+						<text x={displayX + 14} y={displayY + 13} class="display-icon">{icons[i]}</text>
+					{:else}
+						<!-- No BMP or icon - show placeholder box -->
+						<rect
+							x={displayX + 4}
+							y={displayY + 4}
+							width="20"
+							height="14"
+							rx="2"
+							class="display-icon-placeholder"
+						/>
+						<text x={displayX + 14} y={displayY + 13} class="display-icon-placeholder-text">□</text>
+					{/if}
 
 					<!-- Label -->
 					{#if labels[i]}
@@ -267,6 +414,42 @@
 		fill: #f7fafc;
 		font-family: Arial, sans-serif;
 		font-size: 10px;
+		text-anchor: middle;
+		pointer-events: none;
+		user-select: none;
+	}
+
+	.display-bmp-icon {
+		pointer-events: none;
+	}
+
+	.display-icon-placeholder {
+		fill: none;
+		stroke: #4a5568;
+		stroke-width: 1;
+		stroke-dasharray: 2, 2;
+	}
+
+	.display-icon-placeholder-text {
+		fill: #718096;
+		font-family: Arial, sans-serif;
+		font-size: 10px;
+		text-anchor: middle;
+		pointer-events: none;
+		user-select: none;
+	}
+
+	.display-icon-error {
+		fill: #fed7d7;
+		stroke: #e53e3e;
+		stroke-width: 1;
+	}
+
+	.display-icon-error-text {
+		fill: #e53e3e;
+		font-family: Arial, sans-serif;
+		font-size: 10px;
+		font-weight: bold;
 		text-anchor: middle;
 		pointer-events: none;
 		user-select: none;

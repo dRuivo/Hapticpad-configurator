@@ -11,6 +11,8 @@
 		onRemoveProfile: (id: string) => void;
 		onRenameProfile: (id: string, newName: string) => void;
 		onMoveProfile: (id: string, direction: 'up' | 'down') => void;
+		onDuplicateProfile: (id: string) => void;
+		triggerRename?: string | null; // Profile ID that should enter rename mode
 	}
 
 	let {
@@ -20,7 +22,9 @@
 		onAddProfile,
 		onRemoveProfile,
 		onRenameProfile,
-		onMoveProfile
+		onMoveProfile,
+		onDuplicateProfile,
+		triggerRename
 	}: Props = $props();
 
 	let editingProfileId = $state<string | null>(null);
@@ -123,6 +127,12 @@
 		confirmModal.isOpen = false;
 	}
 
+	function handleDuplicate(profile: Profile, event: Event) {
+		event.stopPropagation();
+		if (!canAddProfile) return;
+		onDuplicateProfile(profile.id);
+	}
+
 	function getBitmapCount(profile: Profile): number {
 		return profile.keys.filter((key) => key.bmp).length;
 	}
@@ -130,6 +140,25 @@
 	const maxProfiles = 128;
 	const canAddProfile = $derived(profiles.length < maxProfiles);
 	const canRemoveProfile = $derived(profiles.length > 1);
+
+	// Handle triggerRename to auto-enter edit mode
+	$effect(() => {
+		if (triggerRename) {
+			const profile = profiles.find((p) => p.id === triggerRename);
+			if (profile) {
+				editingProfileId = profile.id;
+				editingName = profile.name;
+				// Focus the input after state update
+				setTimeout(() => {
+					const input = document.querySelector('.name-input') as HTMLInputElement;
+					if (input) {
+						input.focus();
+						input.select(); // Select all text for easy editing
+					}
+				}, 0);
+			}
+		}
+	});
 </script>
 
 <aside class="profiles-sidebar">
@@ -221,6 +250,17 @@
 						title="Move down"
 					>
 						<span class="arrow">↓</span>
+					</button>
+
+					<!-- Duplicate button -->
+					<button
+						class="duplicate-button"
+						onclick={(e) => handleDuplicate(profile, e)}
+						disabled={!canAddProfile}
+						aria-label="Duplicate profile"
+						title="Duplicate profile"
+					>
+						<span class="duplicate-icon">⧉</span>
 					</button>
 
 					<!-- Remove button -->
@@ -450,7 +490,8 @@
 	}
 
 	.move-button,
-	.remove-button {
+	.remove-button,
+	.duplicate-button {
 		width: 24px;
 		height: 24px;
 		border: none;
@@ -480,6 +521,23 @@
 		transform: none;
 	}
 
+	.duplicate-button {
+		background: #9b59b6;
+		color: white;
+	}
+
+	.duplicate-button:hover:not(:disabled) {
+		background: #8e44ad;
+		transform: translateY(-1px);
+	}
+
+	.duplicate-button:disabled {
+		background: #ecf0f1;
+		color: #bdc3c7;
+		cursor: not-allowed;
+		transform: none;
+	}
+
 	.remove-button {
 		background: #e74c3c;
 		color: white;
@@ -497,6 +555,23 @@
 		transform: none;
 	}
 
+	.duplicate-button {
+		background: #9b59b6;
+		color: white;
+	}
+
+	.duplicate-button:hover:not(:disabled) {
+		background: #8e44ad;
+		transform: translateY(-1px);
+	}
+
+	.duplicate-button:disabled {
+		background: #ecf0f1;
+		color: #bdc3c7;
+		cursor: not-allowed;
+		transform: none;
+	}
+
 	.arrow {
 		line-height: 1;
 		font-weight: bold;
@@ -506,6 +581,12 @@
 		line-height: 1;
 		font-weight: bold;
 		font-size: 16px;
+	}
+
+	.duplicate-icon {
+		line-height: 1;
+		font-weight: normal;
+		font-size: 14px;
 	}
 
 	/* Responsive */
