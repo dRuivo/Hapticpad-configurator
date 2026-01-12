@@ -49,6 +49,9 @@
 	// Auto-rename state for duplicated profiles
 	let triggerRename = $state<string | null>(null);
 
+	// Onboarding modal state
+	let showOnboardingModal = $state(true);
+
 	// Computed values
 	const selectedProfile = $derived(
 		appState.profiles.find((p) => p.id === appState.selectedProfileId) || appState.profiles[0]
@@ -416,6 +419,11 @@
 		}
 	}
 
+	// Onboarding modal handlers
+	function handleOnboardingDismiss() {
+		showOnboardingModal = false;
+	}
+
 	async function handleExportXml() {
 		try {
 			clearStatus();
@@ -553,7 +561,7 @@
 <ImportPreviewModal preview={importPreview} onConfirm={confirmImport} onCancel={cancelImport} />
 
 <!-- Onboarding modal -->
-<OnboardingModal />
+<OnboardingModal show={showOnboardingModal} onDismiss={handleOnboardingDismiss} />
 
 <style>
 	:global(body) {

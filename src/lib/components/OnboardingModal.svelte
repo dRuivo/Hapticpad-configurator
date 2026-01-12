@@ -1,52 +1,154 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 
-	let showModal = $state(false);
+	interface Props {
+		show: boolean;
+		onDismiss: () => void;
+	}
+
+	let { show, onDismiss }: Props = $props();
+
+	let dontShowAgain = $state(false);
+	let previousActiveElement: HTMLElement | null = null;
+	let focusableElements: HTMLElement[] = [];
 
 	onMount(() => {
-		// Check if user has seen the onboarding before
-		const hasSeenOnboarding = localStorage.getItem('hapticpad-onboarding-shown');
-		if (!hasSeenOnboarding) {
-			showModal = true;
+		return () => {
+			document.body.style.overflow = '';
+		};
+	});
+
+	$effect(() => {
+		if (show) {
+			previousActiveElement = document.activeElement as HTMLElement;
+			document.body.style.overflow = 'hidden';
+
+			// Update focusable elements and focus button
+			setTimeout(() => {
+				const button = document.querySelector('[data-onboarding-button]') as HTMLButtonElement;
+				button?.focus();
+				updateFocusableElements();
+			}, 0);
+		} else {
+			document.body.style.overflow = '';
+			if (previousActiveElement) {
+				previousActiveElement.focus();
+			}
 		}
 	});
 
-	function hideModal() {
-		showModal = false;
-		localStorage.setItem('hapticpad-onboarding-shown', 'true');
+	function updateFocusableElements() {
+		const modal = document.querySelector('[data-onboarding-modal]');
+		if (!modal) return;
+
+		focusableElements = Array.from(
+			modal.querySelectorAll('button, a, input, [tabindex]:not([tabindex="-1"])')
+		) as HTMLElement[];
+	}
+
+	function handleKeydown(event: KeyboardEvent) {
+		if (!show) return;
+
+		if (event.key === 'Escape') {
+			dismiss();
+			return;
+		}
+
+		if (event.key === 'Tab') {
+			if (focusableElements.length === 0) {
+				event.preventDefault();
+				return;
+			}
+
+			const currentIndex = focusableElements.indexOf(document.activeElement as HTMLElement);
+
+			if (event.shiftKey) {
+				const nextIndex = currentIndex <= 0 ? focusableElements.length - 1 : currentIndex - 1;
+				focusableElements[nextIndex]?.focus();
+			} else {
+				const nextIndex = currentIndex >= focusableElements.length - 1 ? 0 : currentIndex + 1;
+				focusableElements[nextIndex]?.focus();
+			}
+
+			event.preventDefault();
+		}
+	}
+
+	function dismiss() {
+		onDismiss();
+	}
+
+	function handleBackdropClick(event: MouseEvent) {
+		if (event.target === event.currentTarget) {
+			dismiss();
+		}
 	}
 </script>
 
-{#if showModal}
-	<div class="modal-backdrop">
-		<div class="modal">
-			<h2>Welcome to Hapticpad Configurator</h2>
-			<p>This tool helps you configure your Hapticpad device. Here's how to get started:</p>
+<svelte:window onkeydown={handleKeydown} />
 
-			<div class="steps">
-				<div class="step">
-					<strong>1. Import Configuration</strong>
-					<p>Upload a ZIP file from your Hapticpad device or start with a blank configuration.</p>
-				</div>
+{#if show}
+	<div class="modal-backdrop" onclick={handleBackdropClick} role="presentation">
+		<div
+			class="modal"
+			data-onboarding-modal
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="modal-title"
+		>
+			<button class="close-button" onclick={dismiss} aria-label="Close modal"> × </button>
 
-				<div class="step">
-					<strong>2. Configure Keys & Wheel</strong>
-					<p>Click any key or the wheel to configure its label, actions, and behavior.</p>
-				</div>
+			<h2 id="modal-title">Hapticpad Configurator (Prototype)</h2>
 
-				<div class="step">
-					<strong>3. Action Slots</strong>
-					<p>Each key has 3 action slots that can trigger different keycodes with custom delays.</p>
-				</div>
-
-				<div class="step">
-					<strong>4. Export & Install</strong>
-					<p>Export your configuration as a ZIP file and copy it to your Hapticpad device.</p>
-				</div>
+			<div class="credit-section">
+				<p>Built for CNCDan's Hapticpad project.</p>
+				<a
+					href="https://github.com/dmcke5/Hapticpad"
+					target="_blank"
+					rel="noopener noreferrer"
+					class="github-link"
+				>
+					dmcke5/Hapticpad
+				</a>
 			</div>
 
-			<div class="actions">
-				<button onclick={hideModal} class="primary-button">Get Started</button>
+			<div class="how-it-works">
+				<h3>How it works:</h3>
+				<ul>
+					<li>Import a ZIP (config.xml + profile icon folders) or import XML only</li>
+					<li>Select a profile in the sidebar to edit it</li>
+					<li>Click a key (or the wheel) on the device preview to configure it</li>
+					<li>Edit labels, action slots, and wheel mode/key</li>
+					<li>Export ZIP for a full bundle or export XML only</li>
+				</ul>
+			</div>
+
+			<div class="technical-note">
+				<p>
+					Icons are stored as <code>&lbrace;ProfileName&rbrace;/&lbrace;1..6&rbrace;.bmp</code> in ZIP
+					exports.
+				</p>
+			</div>
+
+			<div class="support-section">
+				<p>If this tool is useful to you, consider buying me a coffee ☕</p>
+				<a
+					href="https://buymeacoffee.com/wayfindingdiogo"
+					target="_blank"
+					rel="noopener noreferrer"
+					class="coffee-link"
+				>
+					Buy me a coffee
+				</a>
+			</div>
+
+			<div class="modal-controls">
+				<label class="checkbox-label">
+					<input type="checkbox" bind:checked={dontShowAgain} />
+					Don't show again this session
+				</label>
+
+				<button class="primary-button" onclick={dismiss} data-onboarding-button> Got it </button>
 			</div>
 		</div>
 	</div>
@@ -59,7 +161,7 @@
 		left: 0;
 		right: 0;
 		bottom: 0;
-		background: rgba(0, 0, 0, 0.5);
+		background: rgba(0, 0, 0, 0.6);
 		z-index: 1000;
 		display: flex;
 		align-items: center;
@@ -71,60 +173,168 @@
 		background: white;
 		border-radius: 12px;
 		padding: 32px;
-		max-width: 500px;
+		max-width: 540px;
 		width: 100%;
-		box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+		max-height: 90vh;
+		overflow-y: auto;
+		box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+		position: relative;
+	}
+
+	.close-button {
+		position: absolute;
+		top: 16px;
+		right: 16px;
+		background: none;
+		border: none;
+		font-size: 24px;
+		cursor: pointer;
+		color: #718096;
+		width: 32px;
+		height: 32px;
+		border-radius: 50%;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		transition: all 0.2s ease;
+	}
+
+	.close-button:hover {
+		background: #f7fafc;
+		color: #4a5568;
 	}
 
 	h2 {
-		margin: 0 0 16px 0;
+		margin: 0 0 24px 0;
 		color: #2d3748;
 		font-size: 24px;
 		font-weight: 600;
+		padding-right: 40px;
 	}
 
-	p {
-		color: #4a5568;
-		line-height: 1.6;
+	.credit-section {
 		margin-bottom: 24px;
-	}
-
-	.steps {
-		margin-bottom: 32px;
-	}
-
-	.step {
-		margin-bottom: 20px;
 		padding: 16px;
-		border-radius: 8px;
 		background: #f7fafc;
-		border-left: 4px solid #3498db;
+		border-radius: 8px;
+		border-left: 4px solid #3182ce;
 	}
 
-	.step:last-child {
-		margin-bottom: 0;
-	}
-
-	.step strong {
-		display: block;
-		color: #2d3748;
-		margin-bottom: 4px;
-		font-weight: 600;
-	}
-
-	.step p {
-		margin: 0;
-		color: #718096;
+	.credit-section p {
+		margin: 0 0 8px 0;
+		color: #4a5568;
 		font-size: 14px;
 	}
 
-	.actions {
+	.github-link {
+		color: #3182ce;
+		text-decoration: none;
+		font-weight: 500;
+		font-size: 14px;
+	}
+
+	.github-link:hover {
+		text-decoration: underline;
+	}
+
+	.how-it-works {
+		margin-bottom: 24px;
+	}
+
+	.how-it-works h3 {
+		margin: 0 0 12px 0;
+		color: #2d3748;
+		font-size: 16px;
+		font-weight: 600;
+	}
+
+	.how-it-works ul {
+		margin: 0;
+		padding-left: 20px;
+		color: #4a5568;
+		line-height: 1.6;
+	}
+
+	.how-it-works li {
+		margin-bottom: 6px;
+		font-size: 14px;
+	}
+
+	.technical-note {
+		margin-bottom: 24px;
+		padding: 12px 16px;
+		background: #fffbf0;
+		border-radius: 6px;
+		border: 1px solid #fbd38d;
+	}
+
+	.technical-note p {
+		margin: 0;
+		color: #744210;
+		font-size: 13px;
+		font-style: italic;
+	}
+
+	.technical-note code {
+		background: rgba(116, 66, 16, 0.1);
+		padding: 2px 4px;
+		border-radius: 3px;
+		font-family: 'Monaco', 'Menlo', monospace;
+		font-size: 12px;
+	}
+
+	.support-section {
+		margin-bottom: 32px;
+		padding: 16px;
+		background: #f0fff4;
+		border-radius: 8px;
+		border-left: 4px solid #48bb78;
+		text-align: center;
+	}
+
+	.support-section p {
+		margin: 0 0 12px 0;
+		color: #2f855a;
+		font-size: 14px;
+	}
+
+	.coffee-link {
+		color: #2f855a;
+		text-decoration: none;
+		font-weight: 500;
+		font-size: 14px;
+	}
+
+	.coffee-link:hover {
+		text-decoration: underline;
+	}
+
+	.modal-controls {
 		display: flex;
-		justify-content: center;
+		justify-content: space-between;
+		align-items: center;
+		gap: 16px;
+		border-top: 1px solid #e2e8f0;
+		padding-top: 24px;
+	}
+
+	.checkbox-label {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		color: #718096;
+		font-size: 14px;
+		cursor: pointer;
+		user-select: none;
+	}
+
+	.checkbox-label input[type='checkbox'] {
+		margin: 0;
+		cursor: pointer;
 	}
 
 	.primary-button {
-		background: #3498db;
+		background: #3182ce;
 		color: white;
 		border: none;
 		padding: 12px 24px;
@@ -132,11 +342,39 @@
 		font-weight: 600;
 		cursor: pointer;
 		transition: all 0.2s ease;
-		font-size: 16px;
+		font-size: 14px;
+		min-width: 100px;
 	}
 
 	.primary-button:hover {
-		background: #2980b9;
+		background: #2c5aa0;
 		transform: translateY(-1px);
+	}
+
+	.primary-button:focus {
+		outline: 2px solid #63b3ed;
+		outline-offset: 2px;
+	}
+
+	@media (max-width: 600px) {
+		.modal {
+			margin: 10px;
+			padding: 24px;
+		}
+
+		h2 {
+			font-size: 20px;
+			padding-right: 35px;
+		}
+
+		.modal-controls {
+			flex-direction: column;
+			align-items: stretch;
+			gap: 12px;
+		}
+
+		.checkbox-label {
+			justify-content: center;
+		}
 	}
 </style>
